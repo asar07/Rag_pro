@@ -5,7 +5,7 @@ import math
 import requests
 import json
 
-from pypdf import PdfReader
+from PyPDF2 import PdfReader
 from docx import Document
 from pptx import Presentation
 from bs4 import BeautifulSoup
@@ -284,7 +284,6 @@ for key, default in [
     ("vecs", []),
     ("vec_fn", None),
     ("history", []),
-    ("doc_loaded", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -297,7 +296,7 @@ st.title("📄 Multi-Document Chat")
 secret_key = get_api_key()
 if secret_key:
     api_key = secret_key
-    st.success("✅ API key loaded from secrets", icon="🔑")
+    st.success("API key loaded from secrets", icon="🔑")
 else:
     api_key = st.text_input("Bytez API Key", type="password")
 
@@ -343,7 +342,7 @@ if pages:
         st.session_state.vecs = vecs
         st.session_state.vec_fn = vec_fn
         st.session_state.history = []  # Reset chat on new doc
-        st.success(f"✅ Loaded {len(pages)} page(s) → {len(chunks)} chunks")
+        st.success(f"Loaded {len(pages)} page(s) → {len(chunks)} chunks")
     else:
         st.warning("No text could be extracted from the document.")
 
@@ -384,4 +383,4 @@ if st.session_state.chunks:
 
 else:
     st.info(" Upload a document or enter a URL to start chatting.")
-              
+    
