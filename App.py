@@ -27,10 +27,6 @@ def get_api_key():
 MODELS = [
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
-    "anthropic/claude-3-5-sonnet-20241022",
-    "anthropic/claude-3-haiku-20240307",
-    "meta-llama/Llama-3.1-8B-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
 ]
 
 
