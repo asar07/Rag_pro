@@ -243,9 +243,9 @@ DOCUMENT CONTEXT:
 
     try:
         response = requests.post(
-            "https://api.bytez.com/models/v2/chat",
+            "https://api.bytez.com/models/v2/openai/v1/chat/completions",
             headers={
-                "Authorization": f"Key {api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -431,4 +431,4 @@ else:
 
             st.session_state.history.append({"role": "assistant", "content": answer})
             st.rerun()
-    
+        
