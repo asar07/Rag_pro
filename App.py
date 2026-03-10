@@ -4,8 +4,7 @@ import tempfile
 import math
 import requests
 import json
-
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from docx import Document
 from pptx import Presentation
 from bs4 import BeautifulSoup
