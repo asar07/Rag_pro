@@ -10,7 +10,7 @@ from docx import Document
 from pptx import Presentation
 from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="DocChat", page_icon="📄", layout="centered")
+st.set_page_config(page_title="DocChat", page_icon="📄", layout="wide")
 
 
 # ---------------- API KEY ----------------
@@ -50,13 +50,11 @@ def clean_output(raw):
             except Exception:
                 pass
         return raw
-
     if isinstance(raw, dict):
         if "content" in raw:
             return raw["content"]
         if "generated_text" in raw:
             return raw["generated_text"]
-
     if isinstance(raw, list):
         for item in raw:
             if isinstance(item, dict):
@@ -64,7 +62,6 @@ def clean_output(raw):
                     return item["message"]["content"]
                 if "generated_text" in item:
                     return item["generated_text"]
-
     return str(raw)
 
 
@@ -218,7 +215,7 @@ def retrieve(query, chunks, vecs, vec_fn, k=4):
     return [chunks[i] for i, _ in scored[:k]]
 
 
-# ---------------- MODEL CALL (Direct REST API - no SDK needed) ----------------
+# ---------------- MODEL CALL ----------------
 
 def ask(question, context_chunks, history, api_key, model_id):
     context = "\n\n".join(
@@ -264,11 +261,9 @@ DOCUMENT CONTEXT:
 
         data = response.json()
 
-        # Handle standard OpenAI-compatible response shape
         if "choices" in data:
             return data["choices"][0]["message"]["content"]
 
-        # Fallback to clean_output for other shapes
         return clean_output(data)
 
     except requests.exceptions.Timeout:
@@ -284,103 +279,156 @@ for key, default in [
     ("vecs", []),
     ("vec_fn", None),
     ("history", []),
+    ("doc_name", None),      # track which doc is loaded
+    ("doc_loaded", False),   # flag so we don't reprocess on rerun
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 
-# ---------------- UI ----------------
+# ================================================
+# SIDEBAR
+# ================================================
 
-st.title("📄 Multi-Document Chat")
+with st.sidebar:
+    st.title("📄 DocChat")
+    st.markdown("---")
 
-secret_key = get_api_key()
-if secret_key:
-    api_key = secret_key
-    st.success("API key loaded from secrets", icon="🔑")
-else:
-    api_key = st.text_input("Bytez API Key", type="password")
+    # API Key
+    secret_key = get_api_key()
+    if secret_key:
+        api_key = secret_key
+        st.success("API key loaded ✓", icon="🔑")
+    else:
+        api_key = st.text_input("Bytez API Key", type="password")
 
-url = st.text_input("Load from URL")
-uploaded = st.file_uploader(
-    "Upload Document",
-    type=["pdf", "docx", "pptx", "txt"]
-)
+    st.markdown("---")
 
-with st.expander("⚙️ Settings"):
+    # Upload
+    st.subheader("📂 Load Document")
+    uploaded = st.file_uploader(
+        "Upload a file",
+        type=["pdf", "docx", "pptx", "txt"],
+        label_visibility="collapsed"
+    )
+    url = st.text_input("Or paste a URL", placeholder="https://...")
+
+    st.markdown("---")
+
+    # Settings
+    st.subheader("⚙️ Settings")
     model_id = st.selectbox("Model", MODELS)
     chunk_size = st.slider("Chunk Size", 200, 800, 400)
     overlap = st.slider("Overlap", 0, 150, 60)
     top_k = st.slider("Top Chunks", 2, 8, 4)
 
+    st.markdown("---")
 
-# ---------------- LOAD DOCUMENT ----------------
+    # Clear chat button
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.history = []
+        st.rerun()
 
-pages = None
+    # Doc status
+    if st.session_state.doc_name:
+        st.info(f"📎 {st.session_state.doc_name}")
 
-if uploaded:
-    file_bytes = uploaded.read()
-    name = uploaded.name.lower()
-    with st.spinner("Extracting document..."):
-        if name.endswith(".pdf"):
-            pages = extract_pdf(file_bytes)
-        elif name.endswith(".docx"):
-            pages = extract_docx(file_bytes)
-        elif name.endswith(".pptx"):
-            pages = extract_pptx(file_bytes)
-        elif name.endswith(".txt"):
-            pages = extract_txt(file_bytes)
 
-elif url:
+# ================================================
+# LOAD DOCUMENT — only process when a NEW file arrives
+# ================================================
+
+# Detect new upload by comparing file name to last loaded doc
+if uploaded is not None:
+    if uploaded.name != st.session_state.doc_name:
+        file_bytes = uploaded.read()
+        name = uploaded.name.lower()
+        with st.spinner(f"Extracting {uploaded.name}..."):
+            if name.endswith(".pdf"):
+                pages = extract_pdf(file_bytes)
+            elif name.endswith(".docx"):
+                pages = extract_docx(file_bytes)
+            elif name.endswith(".pptx"):
+                pages = extract_pptx(file_bytes)
+            elif name.endswith(".txt"):
+                pages = extract_txt(file_bytes)
+            else:
+                pages = []
+
+        if pages:
+            chunks = chunk_pages(pages, chunk_size, overlap)
+            if chunks:
+                vocab, vecs, vec_fn = build_index(chunks)
+                st.session_state.chunks = chunks
+                st.session_state.vecs = vecs
+                st.session_state.vec_fn = vec_fn
+                st.session_state.history = []
+                st.session_state.doc_name = uploaded.name
+                st.session_state.doc_loaded = True
+            else:
+                st.warning("No text could be extracted from the document.")
+        else:
+            st.warning("Could not read the document.")
+
+elif url and url != st.session_state.doc_name:
     with st.spinner("Fetching URL..."):
         pages = extract_url(url)
-
-if pages:
-    chunks = chunk_pages(pages, chunk_size, overlap)
-    if chunks:
-        vocab, vecs, vec_fn = build_index(chunks)
-        st.session_state.chunks = chunks
-        st.session_state.vecs = vecs
-        st.session_state.vec_fn = vec_fn
-        st.session_state.history = []  # Reset chat on new doc
-        st.success(f"Loaded {len(pages)} page(s) → {len(chunks)} chunks")
-    else:
-        st.warning("No text could be extracted from the document.")
+    if pages and pages[0]["text"].strip():
+        chunks = chunk_pages(pages, chunk_size, overlap)
+        if chunks:
+            vocab, vecs, vec_fn = build_index(chunks)
+            st.session_state.chunks = chunks
+            st.session_state.vecs = vecs
+            st.session_state.vec_fn = vec_fn
+            st.session_state.history = []
+            st.session_state.doc_name = url
+            st.session_state.doc_loaded = True
 
 
-# ---------------- CHAT ----------------
+# ================================================
+# MAIN — CHAT AREA
+# ================================================
 
-if st.session_state.chunks:
+st.title("💬 Chat with your Document")
+
+if not st.session_state.chunks:
+    st.info("👈 Upload a document or paste a URL in the sidebar to get started.")
+else:
+    # Render chat history
     for msg in st.session_state.history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    prompt = st.chat_input("Ask about the document")
+    # Chat input (always visible at bottom once doc is loaded)
+    prompt = st.chat_input("Ask anything about the document...")
 
     if prompt:
         if not api_key:
-            st.error("Please enter your Bytez API key.")
+            st.error("Please enter your Bytez API key in the sidebar.")
         else:
             st.session_state.history.append({"role": "user", "content": prompt})
 
-            with st.spinner("Thinking..."):
-                srcs = retrieve(
-                    prompt,
-                    st.session_state.chunks,
-                    st.session_state.vecs,
-                    st.session_state.vec_fn,
-                    top_k,
-                )
-                answer = ask(
-                    prompt,
-                    srcs,
-                    st.session_state.history[:-1],
-                    api_key,
-                    model_id,
-                )
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    srcs = retrieve(
+                        prompt,
+                        st.session_state.chunks,
+                        st.session_state.vecs,
+                        st.session_state.vec_fn,
+                        top_k,
+                    )
+                    answer = ask(
+                        prompt,
+                        srcs,
+                        st.session_state.history[:-1],
+                        api_key,
+                        model_id,
+                    )
+                st.markdown(answer)
 
             st.session_state.history.append({"role": "assistant", "content": answer})
             st.rerun()
-
-else:
-    st.info(" Upload a document or enter a URL to start chatting.")
     
