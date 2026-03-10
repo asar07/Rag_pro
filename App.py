@@ -4,7 +4,8 @@ import tempfile
 import math
 import requests
 import json
-from pypdf import PdfReader
+
+import pdfplumber
 from docx import Document
 from pptx import Presentation
 from bs4 import BeautifulSoup
@@ -75,11 +76,11 @@ def extract_pdf(file_bytes):
         path = tmp.name
     pages = []
     try:
-        reader = PdfReader(path)
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append({"page": i + 1, "text": text.strip()})
+        with pdfplumber.open(path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                if text.strip():
+                    pages.append({"page": i + 1, "text": text.strip()})
         return pages
     finally:
         os.unlink(path)
