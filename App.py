@@ -17,7 +17,7 @@ st.set_page_config(page_title="DocChat", page_icon="📄", layout="wide")
 
 def get_api_key():
     try:
-        return st.secrets["BYTEZ_API_KEY"]
+        return st.secrets["GROQ_API_KEY"]
     except Exception:
         return None
 
@@ -25,8 +25,10 @@ def get_api_key():
 # ---------------- MODELS ----------------
 
 MODELS = [
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 ]
 
 
@@ -260,7 +262,7 @@ Provide thorough, insightful, and well-structured answers that go beyond surface
 
     try:
         response = requests.post(
-            "https://api.bytez.com/models/v2/openai/v1/chat/completions",
+            "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -317,7 +319,7 @@ with st.sidebar:
         api_key = secret_key
         st.success("API key loaded ✓", icon="🔑")
     else:
-        api_key = st.text_input("Bytez API Key", type="password")
+        api_key = st.text_input("Groq API Key", type="password")
 
     st.markdown("---")
 
@@ -421,7 +423,7 @@ else:
 
     if prompt:
         if not api_key:
-            st.error("Please enter your Bytez API key in the sidebar.")
+            st.error("Please enter your Groq API key in the sidebar.")
         else:
             st.session_state.history.append({"role": "user", "content": prompt})
 
@@ -448,4 +450,4 @@ else:
 
             st.session_state.history.append({"role": "assistant", "content": answer})
             st.rerun()
-        
+            
