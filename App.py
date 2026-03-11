@@ -4,6 +4,7 @@ import tempfile
 import math
 import requests
 import json
+import base64
 
 import pdfplumber
 from docx import Document
@@ -30,6 +31,9 @@ MODELS = [
     "mixtral-8x7b-32768",
     "gemma2-9b-it",
 ]
+
+# Vision model for image analysis (Groq vision-capable)
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 
 # ---------------- CLEAN MODEL OUTPUT ----------------
@@ -213,7 +217,7 @@ def retrieve(query, chunks, vecs, vec_fn, k=4):
     return [chunks[i] for i, _ in scored[:k]]
 
 
-# ---------------- MODEL CALL ----------------
+# ---------------- DOCUMENT MODEL CALL ----------------
 
 def ask(question, context_chunks, history, api_key, model_id):
     context = "\n\n".join(
@@ -291,6 +295,63 @@ Provide thorough, insightful, and well-structured answers that go beyond surface
         return f"API error: {str(e)}"
 
 
+# ---------------- IMAGE ANALYSIS CALL ----------------
+
+def analyze_image(question, image_b64, media_type, history, api_key):
+    """Send image + question to Groq vision model."""
+    messages = []
+
+    # Add prior image chat history (text-only turns)
+    for m in history[-6:]:
+        if isinstance(m["content"], str):
+            messages.append(m)
+
+    # Current turn with image
+    messages.append({
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{media_type};base64,{image_b64}"
+                }
+            },
+            {
+                "type": "text",
+                "text": question if question.strip() else "Please analyze this image in detail. Describe what you see, identify key elements, and provide any relevant insights."
+            }
+        ]
+    })
+
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": VISION_MODEL,
+                "messages": messages,
+                "max_tokens": 2000,
+            },
+            timeout=60,
+        )
+
+        if response.status_code != 200:
+            return f"Vision API error {response.status_code}: {response.text}"
+
+        data = response.json()
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"]
+        return clean_output(data)
+
+    except requests.exceptions.Timeout:
+        return "Request timed out. Please try again."
+    except Exception as e:
+        return f"Vision API error: {str(e)}"
+
+
 # ---------------- SESSION STATE ----------------
 
 for key, default in [
@@ -298,8 +359,13 @@ for key, default in [
     ("vecs", []),
     ("vec_fn", None),
     ("history", []),
-    ("doc_name", None),      # track which doc is loaded
-    ("doc_loaded", False),   # flag so we don't reprocess on rerun
+    ("doc_name", None),
+    ("doc_loaded", False),
+    ("image_history", []),
+    ("image_b64", None),
+    ("image_media_type", None),
+    ("image_name", None),
+    ("mode", "document"),        # "document" or "image"
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -323,58 +389,108 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Upload
-    st.subheader("📂 Load Document")
-    uploaded = st.file_uploader(
-        "Upload a file",
-        type=["pdf", "docx", "pptx", "txt"],
+    # Mode selector
+    st.subheader("🔀 Mode")
+    mode = st.radio(
+        "Choose input type",
+        ["📄 Document / URL", "🖼️ Image Analysis"],
+        index=0 if st.session_state.mode == "document" else 1,
         label_visibility="collapsed"
     )
-    url = st.text_input("Or paste a URL", placeholder="https://...")
+    st.session_state.mode = "document" if mode == "📄 Document / URL" else "image"
 
     st.markdown("---")
 
-    # Settings
-    st.subheader("⚙️ Settings")
-    model_id = st.selectbox("Model", MODELS)
-    chunk_size = st.slider("Chunk Size", 200, 800, 400)
-    overlap = st.slider("Overlap", 0, 150, 60)
-    top_k = st.slider("Top Chunks", 2, 8, 4)
+    if st.session_state.mode == "document":
+        # Upload document
+        st.subheader("📂 Load Document")
+        uploaded = st.file_uploader(
+            "Upload a file",
+            type=["pdf", "docx", "pptx", "txt"],
+            label_visibility="collapsed"
+        )
+        url = st.text_input("Or paste a URL", placeholder="https://...")
+        uploaded_image = None
+
+        st.markdown("---")
+
+        # Settings
+        st.subheader("⚙️ Settings")
+        model_id = st.selectbox("Model", MODELS)
+        chunk_size = st.slider("Chunk Size", 200, 800, 400)
+        overlap = st.slider("Overlap", 0, 150, 60)
+        top_k = st.slider("Top Chunks", 2, 8, 4)
+
+    else:
+        # Upload image
+        st.subheader("🖼️ Upload Image")
+        uploaded_image = st.file_uploader(
+            "Upload an image",
+            type=["png", "jpg", "jpeg", "webp", "gif"],
+            label_visibility="collapsed"
+        )
+        uploaded = None
+        url = ""
+        model_id = MODELS[0]
+        chunk_size, overlap, top_k = 400, 60, 4
+
+        st.markdown(f"🤖 Vision model: `{VISION_MODEL}`")
 
     st.markdown("---")
 
     # Clear chat button
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.history = []
+        st.session_state.image_history = []
         st.rerun()
 
-    # Doc status
-    if st.session_state.doc_name:
+    # Status
+    if st.session_state.mode == "document" and st.session_state.doc_name:
         st.info(f"📎 {st.session_state.doc_name}")
+    if st.session_state.mode == "image" and st.session_state.image_name:
+        st.info(f"🖼️ {st.session_state.image_name}")
 
 
 # ================================================
-# LOAD DOCUMENT — only process when a NEW file arrives
+# LOAD DOCUMENT
 # ================================================
 
-# Detect new upload by comparing file name to last loaded doc
-if uploaded is not None:
-    if uploaded.name != st.session_state.doc_name:
-        file_bytes = uploaded.read()
-        name = uploaded.name.lower()
-        with st.spinner(f"Extracting {uploaded.name}..."):
-            if name.endswith(".pdf"):
-                pages = extract_pdf(file_bytes)
-            elif name.endswith(".docx"):
-                pages = extract_docx(file_bytes)
-            elif name.endswith(".pptx"):
-                pages = extract_pptx(file_bytes)
-            elif name.endswith(".txt"):
-                pages = extract_txt(file_bytes)
+if st.session_state.mode == "document":
+    if uploaded is not None:
+        if uploaded.name != st.session_state.doc_name:
+            file_bytes = uploaded.read()
+            name = uploaded.name.lower()
+            with st.spinner(f"Extracting {uploaded.name}..."):
+                if name.endswith(".pdf"):
+                    pages = extract_pdf(file_bytes)
+                elif name.endswith(".docx"):
+                    pages = extract_docx(file_bytes)
+                elif name.endswith(".pptx"):
+                    pages = extract_pptx(file_bytes)
+                elif name.endswith(".txt"):
+                    pages = extract_txt(file_bytes)
+                else:
+                    pages = []
+
+            if pages:
+                chunks = chunk_pages(pages, chunk_size, overlap)
+                if chunks:
+                    vocab, vecs, vec_fn = build_index(chunks)
+                    st.session_state.chunks = chunks
+                    st.session_state.vecs = vecs
+                    st.session_state.vec_fn = vec_fn
+                    st.session_state.history = []
+                    st.session_state.doc_name = uploaded.name
+                    st.session_state.doc_loaded = True
+                else:
+                    st.warning("No text could be extracted from the document.")
             else:
-                pages = []
+                st.warning("Could not read the document.")
 
-        if pages:
+    elif url and url != st.session_state.doc_name:
+        with st.spinner("Fetching URL..."):
+            pages = extract_url(url)
+        if pages and pages[0]["text"].strip():
             chunks = chunk_pages(pages, chunk_size, overlap)
             if chunks:
                 vocab, vecs, vec_fn = build_index(chunks)
@@ -382,72 +498,114 @@ if uploaded is not None:
                 st.session_state.vecs = vecs
                 st.session_state.vec_fn = vec_fn
                 st.session_state.history = []
-                st.session_state.doc_name = uploaded.name
+                st.session_state.doc_name = url
                 st.session_state.doc_loaded = True
-            else:
-                st.warning("No text could be extracted from the document.")
-        else:
-            st.warning("Could not read the document.")
 
-elif url and url != st.session_state.doc_name:
-    with st.spinner("Fetching URL..."):
-        pages = extract_url(url)
-    if pages and pages[0]["text"].strip():
-        chunks = chunk_pages(pages, chunk_size, overlap)
-        if chunks:
-            vocab, vecs, vec_fn = build_index(chunks)
-            st.session_state.chunks = chunks
-            st.session_state.vecs = vecs
-            st.session_state.vec_fn = vec_fn
-            st.session_state.history = []
-            st.session_state.doc_name = url
-            st.session_state.doc_loaded = True
+
+# ================================================
+# LOAD IMAGE
+# ================================================
+
+if st.session_state.mode == "image" and uploaded_image is not None:
+    if uploaded_image.name != st.session_state.image_name:
+        img_bytes = uploaded_image.read()
+        media_type = uploaded_image.type or "image/jpeg"
+        st.session_state.image_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        st.session_state.image_media_type = media_type
+        st.session_state.image_name = uploaded_image.name
+        st.session_state.image_history = []
+        st.rerun()
 
 
 # ================================================
 # MAIN — CHAT AREA
 # ================================================
 
-st.title("💬 Chat with your Document")
+if st.session_state.mode == "document":
+    st.title("💬 Chat with your Document")
 
-if not st.session_state.chunks:
-    st.info("👈 Upload a document or paste a URL in the sidebar to get started.")
+    if not st.session_state.chunks:
+        st.info("👈 Upload a document or paste a URL in the sidebar to get started.")
+    else:
+        for msg in st.session_state.history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        prompt = st.chat_input("Ask anything about the document...")
+
+        if prompt:
+            if not api_key:
+                st.error("Please enter your Groq API key in the sidebar.")
+            else:
+                st.session_state.history.append({"role": "user", "content": prompt})
+
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking..."):
+                        srcs = retrieve(
+                            prompt,
+                            st.session_state.chunks,
+                            st.session_state.vecs,
+                            st.session_state.vec_fn,
+                            top_k,
+                        )
+                        answer = ask(
+                            prompt,
+                            srcs,
+                            st.session_state.history[:-1],
+                            api_key,
+                            model_id,
+                        )
+                    st.markdown(answer)
+
+                st.session_state.history.append({"role": "assistant", "content": answer})
+                st.rerun()
+
 else:
-    # Render chat history
-    for msg in st.session_state.history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # ── IMAGE ANALYSIS MODE ──
+    st.title("🖼️ Image Analysis")
 
-    # Chat input (always visible at bottom once doc is loaded)
-    prompt = st.chat_input("Ask anything about the document...")
+    if st.session_state.image_b64 is None:
+        st.info("👈 Upload an image in the sidebar to get started.")
+    else:
+        # Show the uploaded image
+        import io
+        from PIL import Image as PILImage
 
-    if prompt:
-        if not api_key:
-            st.error("Please enter your Groq API key in the sidebar.")
-        else:
-            st.session_state.history.append({"role": "user", "content": prompt})
+        img_data = base64.b64decode(st.session_state.image_b64)
+        pil_img = PILImage.open(io.BytesIO(img_data))
+        st.image(pil_img, caption=st.session_state.image_name, use_column_width=False, width=480)
+        st.markdown("---")
 
-            with st.chat_message("user"):
-                st.markdown(prompt)
+        # Render image chat history
+        for msg in st.session_state.image_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    srcs = retrieve(
-                        prompt,
-                        st.session_state.chunks,
-                        st.session_state.vecs,
-                        st.session_state.vec_fn,
-                        top_k,
-                    )
-                    answer = ask(
-                        prompt,
-                        srcs,
-                        st.session_state.history[:-1],
-                        api_key,
-                        model_id,
-                    )
-                st.markdown(answer)
+        prompt = st.chat_input("Ask anything about the image... (or leave blank for auto-analysis)")
 
-            st.session_state.history.append({"role": "assistant", "content": answer})
-            st.rerun()
-            
+        if prompt is not None:
+            if not api_key:
+                st.error("Please enter your Groq API key in the sidebar.")
+            else:
+                display_prompt = prompt if prompt.strip() else "🔍 Auto-analyze this image"
+                st.session_state.image_history.append({"role": "user", "content": display_prompt})
+
+                with st.chat_message("user"):
+                    st.markdown(display_prompt)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Analyzing image..."):
+                        answer = analyze_image(
+                            prompt,
+                            st.session_state.image_b64,
+                            st.session_state.image_media_type,
+                            st.session_state.image_history[:-1],
+                            api_key,
+                        )
+                    st.markdown(answer)
+
+                st.session_state.image_history.append({"role": "assistant", "content": answer})
+                st.rerun()
