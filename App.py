@@ -5,7 +5,6 @@ import math
 import requests
 import json
 import base64
-
 import pdfplumber
 from docx import Document
 from pptx import Presentation
@@ -13,17 +12,12 @@ from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="DocChat", page_icon="📄", layout="wide")
 
-
-# ---------------- API KEY ----------------
-
 def get_api_key():
     try:
         return st.secrets["GROQ_API_KEY"]
     except Exception:
         return None
 
-
-# ---------------- MODELS ----------------
 
 MODELS = [
     "llama-3.3-70b-versatile",
@@ -35,8 +29,6 @@ MODELS = [
 # Vision model for image analysis (Groq vision-capable)
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-
-# ---------------- CLEAN MODEL OUTPUT ----------------
 
 def clean_output(raw):
     if isinstance(raw, str):
@@ -66,9 +58,6 @@ def clean_output(raw):
                     return item["generated_text"]
     return str(raw)
 
-
-# ---------------- PDF ----------------
-
 def extract_pdf(file_bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(file_bytes)
@@ -85,8 +74,6 @@ def extract_pdf(file_bytes):
         os.unlink(path)
 
 
-# ---------------- DOCX ----------------
-
 def extract_docx(file_bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
         tmp.write(file_bytes)
@@ -98,8 +85,6 @@ def extract_docx(file_bytes):
     finally:
         os.unlink(path)
 
-
-# ---------------- PPTX ----------------
 
 def extract_pptx(file_bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
@@ -121,14 +106,10 @@ def extract_pptx(file_bytes):
         os.unlink(path)
 
 
-# ---------------- TXT ----------------
-
 def extract_txt(file_bytes):
     text = file_bytes.decode("utf-8", errors="ignore")
     return [{"page": 1, "text": text}]
 
-
-# ---------------- URL ----------------
 
 def extract_url(url):
     try:
@@ -140,9 +121,7 @@ def extract_url(url):
         return [{"page": 1, "text": text}]
     except Exception:
         return [{"page": 1, "text": ""}]
-
-
-# ---------------- CHUNKING ----------------
+        
 
 def chunk_pages(pages, size=400, overlap=60):
     chunks = []
@@ -161,8 +140,6 @@ def chunk_pages(pages, size=400, overlap=60):
             start += size - overlap
     return chunks
 
-
-# ---------------- VECTOR INDEX ----------------
 
 def build_index(chunks):
     vocab = {}
@@ -195,17 +172,12 @@ def build_index(chunks):
     vecs = [vec(c["text"]) for c in chunks]
     return vocab, vecs, vec
 
-
-# ---------------- COSINE ----------------
-
 def cosine(a, b):
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = sum(x ** 2 for x in a) ** 0.5
     norm_b = sum(x ** 2 for x in b) ** 0.5
     return dot / (norm_a * norm_b + 1e-9)
 
-
-# ---------------- RETRIEVE ----------------
 
 def retrieve(query, chunks, vecs, vec_fn, k=4):
     qv = vec_fn(query)
@@ -216,8 +188,6 @@ def retrieve(query, chunks, vecs, vec_fn, k=4):
     )
     return [chunks[i] for i, _ in scored[:k]]
 
-
-# ---------------- DOCUMENT MODEL CALL ----------------
 
 def ask(question, context_chunks, history, api_key, model_id):
     context = "\n\n".join(
@@ -294,9 +264,6 @@ Provide thorough, insightful, and well-structured answers that go beyond surface
     except Exception as e:
         return f"API error: {str(e)}"
 
-
-# ---------------- IMAGE ANALYSIS CALL ----------------
-
 def analyze_image(question, image_b64, media_type, history, api_key):
     """Send image + question to Groq vision model."""
     messages = []
@@ -352,8 +319,6 @@ def analyze_image(question, image_b64, media_type, history, api_key):
         return f"Vision API error: {str(e)}"
 
 
-# ---------------- SESSION STATE ----------------
-
 for key, default in [
     ("chunks", []),
     ("vecs", []),
@@ -365,15 +330,10 @@ for key, default in [
     ("image_b64", None),
     ("image_media_type", None),
     ("image_name", None),
-    ("mode", "document"),        # "document" or "image"
+    ("mode", "document"),       
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
-
-
-# ================================================
-# SIDEBAR
-# ================================================
 
 with st.sidebar:
     st.title("📄 DocChat")
@@ -451,10 +411,6 @@ with st.sidebar:
         st.info(f"🖼️ {st.session_state.image_name}")
 
 
-# ================================================
-# LOAD DOCUMENT
-# ================================================
-
 if st.session_state.mode == "document":
     if uploaded is not None:
         if uploaded.name != st.session_state.doc_name:
@@ -502,10 +458,6 @@ if st.session_state.mode == "document":
                 st.session_state.doc_loaded = True
 
 
-# ================================================
-# LOAD IMAGE
-# ================================================
-
 if st.session_state.mode == "image" and uploaded_image is not None:
     if uploaded_image.name != st.session_state.image_name:
         img_bytes = uploaded_image.read()
@@ -516,10 +468,6 @@ if st.session_state.mode == "image" and uploaded_image is not None:
         st.session_state.image_history = []
         st.rerun()
 
-
-# ================================================
-# MAIN — CHAT AREA
-# ================================================
 
 if st.session_state.mode == "document":
     st.title("💬 Chat with your Document")
@@ -564,13 +512,11 @@ if st.session_state.mode == "document":
                 st.rerun()
 
 else:
-    # ── IMAGE ANALYSIS MODE ──
     st.title("🖼️ Image Analysis")
 
     if st.session_state.image_b64 is None:
         st.info("👈 Upload an image in the sidebar to get started.")
     else:
-        # Show the uploaded image
         import io
         from PIL import Image as PILImage
 
@@ -579,7 +525,6 @@ else:
         st.image(pil_img, caption=st.session_state.image_name, use_column_width=False, width=480)
         st.markdown("---")
 
-        # Render image chat history
         for msg in st.session_state.image_history:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
