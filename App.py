@@ -349,10 +349,10 @@ with st.sidebar:
     st.markdown("---")
 
     # Mode selector
-    st.subheader("🔀 Mode")
+    st.subheader("Mode")
     mode = st.radio(
         "Choose input type",
-        ["📄 Document / URL", "🖼️ Image Analysis"],
+        ["Document / URL", "Image Analysis"],
         index=0 if st.session_state.mode == "document" else 1,
         label_visibility="collapsed"
     )
