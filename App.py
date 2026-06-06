@@ -26,7 +26,6 @@ MODELS = [
     "gemma2-9b-it",
 ]
 
-# Vision model for image analysis (Groq vision-capable)
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 
@@ -473,7 +472,7 @@ if st.session_state.mode == "document":
     st.title("💬 Chat with your Document")
 
     if not st.session_state.chunks:
-        st.info("👈 Upload a document or paste a URL in the sidebar to get started.")
+        st.info("Upload a document or paste a URL in the sidebar to get started.")
     else:
         for msg in st.session_state.history:
             with st.chat_message(msg["role"]):
